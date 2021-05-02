@@ -5,7 +5,35 @@
 #include <sstream>
 #include "../detours.h"
 
+#include <imgui.h>
+#include <imgui_impl_dx9.h>
+#include <imgui_impl_win32.h>
+
+// new window procedure payload
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    /* Currently need a way to delegate input to ImGui whilest handling it accordingly to gmod aswell..
+    if (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse)
+        return ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
+    */
+
+    ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
+    ImGuiIO& io = ImGui::GetIO();
+
+    if (io.WantCaptureKeyboard && io.WantCaptureMouse) {
+        DefWindowProc(hWnd, msg, wParam, lParam);
+
+        return true; // block the input from reaching the gmod window
+    }
+
+    return CallWindowProc((WNDPROC)DXHook::originalWNDPROC, hWnd, msg, wParam, lParam);
+}
+
 namespace DXHook {
+    LONG_PTR originalWNDPROC;
+
 	inline void error(GarrysMod::Lua::ILuaBase* LUA, const char* str) {
 		LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
 		LUA->GetField(-1, "print");
@@ -17,11 +45,9 @@ namespace DXHook {
 
 	int Initialize(GarrysMod::Lua::ILuaBase* LUA) { // Used for setting up dummy device, and endscene hook
         AllocConsole();
-
         FILE* pFile = nullptr;
 
         freopen_s(&pFile, "CONOUT$", "w", stdout); // cursed way to redirect stdout to our own console
-
 
         HMODULE hDLL;
         hDLL = GetModuleHandleA("d3d9.dll"); // Attempt to locate the d3d9 dll that gmod loaded
@@ -61,7 +87,48 @@ namespace DXHook {
             }
 
         }
+
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();// (void)io;
         
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+        //io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+
+        RECT resolutionDetails;
+        GetClientRect(GetProcessWindow(), &resolutionDetails);
+
+        // Setup Dear ImGui style
+        ImGui::StyleColorsDark();
+
+        ImGui_ImplWin32_Init(GetProcessWindow());
+
+        ImGui::GetMainViewport()->WorkSize = ImVec2(1920, 1080);
+        io.DisplaySize.x = 1920; // width
+        io.DisplaySize.y = 1080; // height
+
+        // setup key codes
+
+        // 0-9 key codes
+        for (int i = 0x30; i <= 0x39; i++) {
+            keyCodes.push_back(i);
+        }
+
+        // A-Z key codes
+        for (int i = 0x41; i <= 0x5A; i++) {
+            keyCodes.push_back(i);
+        }
+
+        // cursed C++ is what i live for
+        LONG_PTR currentWndProc = GetWindowLongPtr(GetProcessWindow(), GWLP_WNDPROC);
+        originalWNDPROC = currentWndProc;
+
+        SetWindowLongPtr(GetProcessWindow(), GWLP_WNDPROC, (LONG_PTR)&WndProc);
+
+        Sleep(150);
+
+
+
         return 0;
 	} 
 
@@ -79,6 +146,14 @@ namespace DXHook {
         }
         else {
             error(LUA, "Reverted detour on EndScene..");
+
+            ImGui_ImplDX9_Shutdown();
+            ImGui_ImplWin32_Shutdown();
+            ImGui::DestroyContext();
+
+            error(LUA, "Restoring original window procedure for gmod..");
+
+            SetWindowLongPtr(GetProcessWindow(), GWLP_WNDPROC, originalWNDPROC);
         }
 
         return 0;

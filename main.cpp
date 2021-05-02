@@ -10,6 +10,7 @@
 using namespace GarrysMod::Lua;
 
 
+
 // Called when the module is loaded
 GMOD_MODULE_OPEN()
 {
